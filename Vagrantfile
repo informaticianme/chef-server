@@ -13,13 +13,6 @@ PASSWORD = 'insecurepassword'
 SHORT_NAME = 'psul'
 LONG_NAME = 'Penn State University Libraries'
 
-$chef_server_config = <<SCRIPT
-chef-server-ctl user-create #{USER_NAME} #{FIRST_NAME} #{LAST_NAME} #{EMAIL} #{PASSWORD} -f /vagrant/#{USER_NAME}.pem
-scp -i /home/vagrant/.ssh/#{SSH_KEY}.pem -o StrictHostKeyChecking=no /vagrant/#{USER_NAME}.pem #{ENV['USER']}@10.0.2.2:#{ENV['HOME']}/.chef/#{USER_NAME}.pem
-chef-server-ctl org-create #{SHORT_NAME} #{LONG_NAME} --association_user #{USER_NAME} -f /vagrant/#{SHORT_NAME}-validator.pem
-scp -i /home/vagrant/.ssh/#{SSH_KEY}.pem -o StrictHostKeyChecking=no /vagrant/#{SHORT_NAME}-validator.pem #{ENV['USER']}@10.0.2.2:#{ENV['HOME']}/.chef/#{SHORT_NAME}-validator.pem
-SCRIPT
-
 $chef_client_config = <<SCRIPT
 /bin/echo 'log_level :info' >> /home/vagrant/client.rb
 /bin/echo "log_location '/var/log/chef/client.log'" >> /home/vagrant/client.rb
@@ -53,21 +46,7 @@ Vagrant.configure('2') do |config|
 	config.vm.usable_port_range = (2501..2535)
 	config.landrush.enabled = true
 	config.landrush.tld = "#{DOMAIN}.test"
-	config.ssh.private_key_path = [
-		"#{ENV['HOME']}/.ssh/#{SSH_KEY}.pem",
-		"#{ENV['HOME']}/.vagrant.d/insecure_private_key"
-	]
-	config.ssh.insert_key = false
-	config.vm.provision :file,
-		source: "#{ENV['HOME']}/.ssh/#{SSH_KEY}.pub",
-		destination: "/home/vagrant/.ssh/authorized_keys"
-	config.vm.provision :file,
-		source: "#{ENV['HOME']}/.ssh/#{SSH_KEY}.pem",
-		destination: "/home/vagrant/.ssh/#{SSH_KEY}.pem"
-	config.vm.provision :file,
-		source: "#{ENV['HOME']}/.ssh/#{SSH_KEY}.pub",
-		destination: "/home/vagrant/.ssh/#{SSH_KEY}.pub"
-	machines.each do |machine|
+		machines.each do |machine|
 		config.vm.define machine[:name] do |guest|
 			guest.vm.hostname = "#{machine[:name]}.#{machine[:subdomain]}.#{DOMAIN}.test"
 			guest.vm.provider :virtualbox do |vb|
@@ -76,24 +55,29 @@ Vagrant.configure('2') do |config|
 				vb.cpus = machine[:cpus]
 				vb.customize [ 'modifyvm', :id, '--vram', '33' ]
 			end
-			guest.vm.provision :chef_solo do |chef|
-				chef.synced_folder_type = 'rsync'
-			end
 			if machine[:name] == 'chef'
 				guest.vm.provision :chef_solo do |chef|
 					chef.synced_folder_type = 'rsync'
 					chef.run_list = [ 'recipe[chef-server]' ]
 				end
-				guest.vm.provision :shell, inline: $chef_server_config
+				config.vm.provision :file,
+					source: ".vagrant/machines/#{machine[:name]}/virtualbox/private_key_#{machine[:name]}",
+					destination: "/home/vagrant/.ssh/private_key_#{machine[:name]}"
+				config.vm.provision :shell,
+					inline: "scp -i /home/vagrant/.ssh/private_key_#{machine[:name]} -o StrictHostKeyChecking=no vagrant@#{machine[:name]}.#{machine[:subdomain]}.#{DOMAIN}.test:/home/vagrant/.ssh/authorized_keys"
+				config.vm.provision :shell,
+					inline: "chef-server-ctl user-create #{USER_NAME} #{FIRST_NAME} #{LAST_NAME} #{EMAIL} #{PASSWORD} -f /vagrant/#{USER_NAME}.pem"
+				config.vm.provision :shell,
+					inline: "chef-server-ctl org-create #{SHORT_NAME} #{LONG_NAME} --association_user #{USER_NAME} -f /vagrant/#{SHORT_NAME}-validator.pem"
+				config.vm.provision :shell,
+					inline: "scp -i /home/vagrant/.ssh/private_key_chef -o StrictHostKeyChecking=no /vagrant/#{USER_NAME}.pem #{ENV['USER']}@10.0.2.2:#{ENV['HOME']}/.chef/#{USER_NAME}.pem"
+				config.vm.provision :shell,
+					inline: "scp -i /home/vagrant/.ssh/private_key_chef -o StrictHostKeyChecking=no /vagrant/#{SHORT_NAME}-validator.pem #{ENV['USER']}@10.0.2.2:#{ENV['HOME']}/.chef/#{SHORT_NAME}-validator.pem"
 			else
 				guest.vm.provision :chef_solo do |chef|
 					chef.synced_folder_type = 'rsync'
-					#chef.run_list = [ 'recipe[chef-client]' ]
+					chef.run_list = [ 'recipe[chef-client]' ]
 				end
-				
-				# duplicates some of below
-				guest.vm.provision :shell, inline: $chef_client_config
-				
 				guest.vm.provision :file, source: "#{ENV['HOME']}/.chef/#{SHORT_NAME}-validator.pem", destination: "/home/vagrant/#{SHORT_NAME}-validator.pem"
 				guest.vm.provision :shell, inline: "mv /home/vagrant/#{SHORT_NAME}-validator.pem /etc/chef"
 				guest.vm.provision :shell, inline: $script
